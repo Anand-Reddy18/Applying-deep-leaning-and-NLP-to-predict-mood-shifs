@@ -1,0 +1,9 @@
+pandas
+numpy
+opencv-python
+deepface
+scikit-learn
+tensorflow
+fastapi
+uvicorn
+pydantic
