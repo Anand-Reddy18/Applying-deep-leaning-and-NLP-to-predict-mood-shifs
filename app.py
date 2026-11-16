@@ -76,8 +76,9 @@ with tabs[2]:
     if image_file is not None and st.button("Analyze facial expression"):
         try:
             import numpy as np
+            from PIL import Image
             image_bytes = image_file.getvalue()
-            image_array = np.array(__import__("PIL").Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+            image_array = np.array(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
             analysis = load_face_analyzer().analyze(
                 img_path=image_array,
                 actions=["emotion"],
