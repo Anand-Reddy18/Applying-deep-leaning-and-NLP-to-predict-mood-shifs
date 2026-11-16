@@ -1,55 +1,64 @@
+"""Evaluate a simple categorical transition baseline on the legacy CSV.
+
+This deliberately replaces the old LSTM: integer label IDs are categories, not
+continuous measurements, and the old trainer used a different sequence length
+from its prediction script. No synthetic sleep/away labels are learned.
+"""
+from __future__ import annotations
+
+import json
+from collections import Counter, defaultdict
+from pathlib import Path
+
 import pandas as pd
-import numpy as np
-import pickle
-
+from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.utils import to_categorical
+
+from mood_engine import hourly_majority, load_legacy_dataset
 
 
-def train_model():
-    print("Loading dataset...")
-    df = pd.read_csv("mood_dataset.csv")
+def main() -> None:
+    raw = load_legacy_dataset("mood_dataset.csv")
+    hourly = hourly_majority(raw)
+    if len(hourly) < 12:
+        raise SystemExit(
+            f"Only {len(hourly)} valid emotion-hours are available. "
+            "Collect more real observations before evaluating a forecast."
+        )
 
-    encoder = LabelEncoder()
-    df["emotion_encoded"] = encoder.fit_transform(df["emotion"])
+    labels = hourly["emotion"].tolist()
+    split = max(1, int(len(labels) * 0.8))
+    if split >= len(labels):
+        split = len(labels) - 1
+    train_labels, test_labels = labels[:split], labels[split:]
 
-    # Save the encoder for inference
-    with open("label_encoder.pkl", "wb") as f:
-        pickle.dump(encoder, f)
-    print("LabelEncoder saved to label_encoder.pkl")
+    transitions = defaultdict(Counter)
+    for previous, current in zip(train_labels, train_labels[1:]):
+        transitions[previous][current] += 1
+    global_counts = Counter(train_labels)
 
-    sequence_length = 5
-    X = []
-    Y = []
-    data = df["emotion_encoded"].values
+    predictions = []
+    previous = train_labels[-1]
+    for actual in test_labels:
+        counts = transitions.get(previous, global_counts)
+        prediction = counts.most_common(1)[0][0]
+        predictions.append(prediction)
+        previous = actual  # teacher-forced one-step-ahead evaluation
 
-    for i in range(len(data) - sequence_length):
-        X.append(data[i:i+sequence_length])
-        Y.append(data[i+sequence_length])
+    encoder = LabelEncoder().fit(labels)
+    metrics = {
+        "valid_hourly_observations": len(hourly),
+        "training_observations": len(train_labels),
+        "test_observations": len(test_labels),
+        "accuracy": accuracy_score(test_labels, predictions),
+        "macro_f1": f1_score(test_labels, predictions, labels=encoder.classes_, average="macro", zero_division=0),
+        "classification_report": classification_report(test_labels, predictions, labels=encoder.classes_, zero_division=0, output_dict=True),
+        "note": "Small, user-specific dataset; chronological one-step evaluation is not proof of general predictive ability.",
+    }
+    Path("evaluation.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(json.dumps({key: value for key, value in metrics.items() if key != "classification_report"}, indent=2))
+    print("\nDetailed report saved to evaluation.json")
 
-    X = np.array(X)
-    Y = np.array(Y)
-    X = X.reshape(X.shape[0], X.shape[1], 1)
-    Y = to_categorical(Y)
-
-    model = Sequential()
-    model.add(LSTM(64, input_shape=(sequence_length, 1)))
-    model.add(Dense(Y.shape[1], activation="softmax"))
-
-    model.compile(
-        optimizer="adam",
-        loss="categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-
-    print("Training model...")
-    model.fit(X, Y, epochs=20, batch_size=16)
-
-    model.save("mood_predictor.h5")
-    print("Training complete")
-    print("Model saved successfully")
 
 if __name__ == "__main__":
-    train_model()
+    main()
